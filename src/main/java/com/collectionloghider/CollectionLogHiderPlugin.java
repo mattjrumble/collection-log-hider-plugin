@@ -6,7 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.ScriptID;
 import net.runelite.api.events.ScriptPostFired;
-import net.runelite.api.widgets.ComponentID;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -15,6 +15,8 @@ import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 
 import javax.inject.Inject;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Slf4j
 @PluginDescriptor(
@@ -32,9 +34,7 @@ public class CollectionLogHiderPlugin extends Plugin
 	@Inject
 	private ClientThread clientThread;
 
-	// Guards against a stale invokeLater callback running after a newer page
-	// navigation has already been handled (e.g. rapid double-click).
-	private boolean collectionLogDirty = false;
+	private static final Pattern OBTAINED_PATTERN = Pattern.compile("Obtained: (<col=[^>]+>)(\\d+)/(\\d+)(</col>)");
 
 	@Provides
 	CollectionLogHiderConfig provideConfig(ConfigManager configManager)
@@ -50,10 +50,20 @@ public class CollectionLogHiderPlugin extends Plugin
 			return;
 		}
 
+		// Update header text immediately to avoid a flash of "Obtained: X/Y".
+		if (config.showRemainingCount())
+		{
+			Widget pageHead = client.getWidget(InterfaceID.Collection.HEADER_TEXT);
+			if (pageHead != null)
+			{
+				updateObtainedText(pageHead);
+			}
+		}
+
 		// Hide everything immediately so nothing incorrect is visible before the
 		// deferred layout runs.
 		if (config.hideObtainedItems()) {
-			Widget itemsContainer = client.getWidget(ComponentID.COLLECTION_LOG_ENTRY_ITEMS);
+			Widget itemsContainer = client.getWidget(InterfaceID.Collection.ITEMS_CONTENTS);
 			if (itemsContainer != null) {
 				for (Widget item : itemsContainer.getDynamicChildren()) {
 					item.setHidden(true);
@@ -61,25 +71,23 @@ public class CollectionLogHiderPlugin extends Plugin
 			}
 		}
 
-		collectionLogDirty = true;
-		clientThread.invokeLater(this::layoutCollectionLog);
+		layoutCollectionLog();
 	}
 
 	private void layoutCollectionLog()
 	{
-		if (!collectionLogDirty)
-		{
-			return;
-		}
-		collectionLogDirty = false;
-
-		Widget pageHead = client.getWidget(ComponentID.COLLECTION_LOG_ENTRY_HEADER);
+		Widget pageHead = client.getWidget(InterfaceID.Collection.HEADER_TEXT);
 		if (pageHead == null)
 		{
 			return;
 		}
 
-		Widget itemsContainer = client.getWidget(ComponentID.COLLECTION_LOG_ENTRY_ITEMS);
+		if (config.showRemainingCount())
+		{
+			updateObtainedText(pageHead);
+		}
+
+		Widget itemsContainer = client.getWidget(InterfaceID.Collection.ITEMS_CONTENTS);
 		if (itemsContainer == null)
 		{
 			return;
@@ -147,6 +155,42 @@ public class CollectionLogHiderPlugin extends Plugin
 				if (config.switchItemOpacity()) {
 					item.setOpacity(0);
 				}
+			}
+		}
+	}
+
+	private void updateObtainedText(Widget headerText)
+	{
+		Widget[] children = headerText.getChildren();
+		if (children == null)
+		{
+			return;
+		}
+
+		for (Widget child : children)
+		{
+			String text = child.getText();
+			if (text == null)
+			{
+				continue;
+			}
+			Matcher m = OBTAINED_PATTERN.matcher(text);
+			if (m.find())
+			{
+				int obtained = Integer.parseInt(m.group(2));
+				int total = Integer.parseInt(m.group(3));
+				int remaining = total - obtained;
+				// "Remaining: " is wider than "Obtained: " — expand the widget so the
+				// number doesn't wrap to a new line.
+				child.setOriginalWidth(child.getOriginalWidth() + 20);
+				child.revalidate();
+				child.setText(m.replaceFirst("Remaining: " + m.group(1) + remaining + "/" + total + m.group(4)));
+				break;
+			}
+			if (text.startsWith("Obtained: "))
+			{
+				child.setText("");
+				break;
 			}
 		}
 	}

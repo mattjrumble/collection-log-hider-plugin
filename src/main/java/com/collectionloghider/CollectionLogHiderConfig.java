@@ -22,9 +22,19 @@ public interface CollectionLogHiderConfig extends Config
 	@ConfigItem(
 		keyName = "switchItemOpacity",
 		name = "Switch item opacity",
-		description = "Show obtained items at opacity 1 and unobtained items at opacity 0"
+		description = "Show obtained items as opaque and unobtained items as translucent"
 	)
 	default boolean switchItemOpacity()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "showRemainingCount",
+		name = "Show remaining count",
+		description = "Replace 'Obtained: X/Y' with 'Remaining: (Y-X)/Y' in the collection log header"
+	)
+	default boolean showRemainingCount()
 	{
 		return true;
 	}

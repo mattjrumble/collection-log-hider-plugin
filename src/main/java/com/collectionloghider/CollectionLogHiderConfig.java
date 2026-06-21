@@ -38,4 +38,14 @@ public interface CollectionLogHiderConfig extends Config
 	{
 		return true;
 	}
+
+	@ConfigItem(
+		keyName = "hideCompletedSections",
+		name = "Hide completed sections",
+		description = "Remove fully-obtained sections from the sidebar list"
+	)
+	default boolean hideCompletedSections()
+	{
+		return true;
+	}
 }

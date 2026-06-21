@@ -128,14 +128,11 @@ public class CollectionLogHiderPlugin extends Plugin
 		for (Widget item : items)
 		{
 			boolean isObtained = (item.getOpacity() == 0);
-			log.debug("isObtained: {}", isObtained);
-			log.debug("getOpacity1: {}", item.getOpacity());
 			if (isObtained) {
 				if (config.hideObtainedItems()) {
 					item.setHidden(true);
 				}
 				if (config.switchItemOpacity()) {
-					log.debug("setOpacity(175)");
 					item.setOpacity(175);
 				}
 			} else {
@@ -148,11 +145,9 @@ public class CollectionLogHiderPlugin extends Plugin
 					slot++;
 				}
 				if (config.switchItemOpacity()) {
-					log.debug("setOpacity(0)");
 					item.setOpacity(0);
 				}
 			}
-			log.debug("getOpacity2: {}", item.getOpacity());
 		}
 	}
 

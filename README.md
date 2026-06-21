@@ -1,3 +1,3 @@
 # Collection Log Hider
 
-Hide obtained items from collection log pages.
+A RuneLite plugin for hiding obtained items and completed sections from the collection log.

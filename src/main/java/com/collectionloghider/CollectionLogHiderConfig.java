@@ -4,9 +4,11 @@ import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
 
-@ConfigGroup("collectionloghider")
+@ConfigGroup(CollectionLogHiderConfig.GROUP)
 public interface CollectionLogHiderConfig extends Config
 {
+	String GROUP = "collectionloghider";
+
 	@ConfigItem(
 		keyName = "hideObtainedItems",
 		name = "Hide obtained items",

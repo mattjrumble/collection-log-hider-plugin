@@ -1,10 +1,12 @@
-package com.example;
+package com.collectionloghider;
 
 import com.google.inject.Provides;
-import javax.inject.Inject;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-
 import net.runelite.api.Client;
+import net.runelite.api.ScriptID;
+import net.runelite.api.events.ScriptPostFired;
+import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -12,33 +14,32 @@ import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 
-import net.runelite.api.*;
-import net.runelite.api.events.ScriptPostFired;
-import net.runelite.api.widgets.ComponentID;
+import javax.inject.Inject;
 
 @Slf4j
 @PluginDescriptor(
-	name = "Example"
+	name = "Collection Log Hider"
 )
-public class ExamplePlugin extends Plugin
+public class CollectionLogHiderPlugin extends Plugin
 {
+	@Inject
+	@Getter
+	public CollectionLogHiderConfig config;
+
 	@Inject
 	private Client client;
 
 	@Inject
 	private ClientThread clientThread;
 
-	@Inject
-	private ExampleConfig config;
-
 	// Guards against a stale invokeLater callback running after a newer page
 	// navigation has already been handled (e.g. rapid double-click).
 	private boolean collectionLogDirty = false;
 
 	@Provides
-	ExampleConfig provideConfig(ConfigManager configManager)
+	CollectionLogHiderConfig provideConfig(ConfigManager configManager)
 	{
-		return configManager.getConfig(ExampleConfig.class);
+		return configManager.getConfig(CollectionLogHiderConfig.class);
 	}
 
 	@Subscribe
@@ -51,12 +52,12 @@ public class ExamplePlugin extends Plugin
 
 		// Hide everything immediately so nothing incorrect is visible before the
 		// deferred layout runs.
-		Widget itemsContainer = client.getWidget(ComponentID.COLLECTION_LOG_ENTRY_ITEMS);
-		if (itemsContainer != null)
-		{
-			for (Widget item : itemsContainer.getDynamicChildren())
-			{
-				item.setHidden(true);
+		if (config.hideObtainedItems()) {
+			Widget itemsContainer = client.getWidget(ComponentID.COLLECTION_LOG_ENTRY_ITEMS);
+			if (itemsContainer != null) {
+				for (Widget item : itemsContainer.getDynamicChildren()) {
+					item.setHidden(true);
+				}
 			}
 		}
 
@@ -126,23 +127,32 @@ public class ExamplePlugin extends Plugin
 		int slot = 0;
 		for (Widget item : items)
 		{
-			boolean isObtained = item.getItemQuantity() > 0;
-			if (isObtained)
-			{
-				item.setHidden(true);
+			boolean isObtained = (item.getOpacity() == 0);
+			log.debug("isObtained: {}", isObtained);
+			log.debug("getOpacity1: {}", item.getOpacity());
+			if (isObtained) {
+				if (config.hideObtainedItems()) {
+					item.setHidden(true);
+				}
+				if (config.switchItemOpacity()) {
+					log.debug("setOpacity(175)");
+					item.setOpacity(175);
+				}
+			} else {
+				if (config.hideObtainedItems()) {
+					item.setForcedPosition(
+						startX + (slot % columns) * strideX,
+						startY + (slot / columns) * strideY
+					);
+					item.setHidden(false);
+					slot++;
+				}
+				if (config.switchItemOpacity()) {
+					log.debug("setOpacity(0)");
+					item.setOpacity(0);
+				}
 			}
-			else
-			{
-				// setForcedPosition overrides relativeX/Y even after clientscript
-				// revalidation, so repositioning scripts can't clobber our layout.
-				item.setForcedPosition(
-					startX + (slot % columns) * strideX,
-					startY + (slot / columns) * strideY
-				);
-				item.setHidden(false);
-				item.setOpacity(0);
-				slot++;
-			}
+			log.debug("getOpacity2: {}", item.getOpacity());
 		}
 	}
 

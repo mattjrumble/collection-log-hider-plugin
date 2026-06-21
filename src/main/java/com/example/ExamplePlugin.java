@@ -3,14 +3,18 @@ package com.example;
 import com.google.inject.Provides;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
-import net.runelite.api.ChatMessageType;
+
 import net.runelite.api.Client;
-import net.runelite.api.GameState;
-import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.widgets.Widget;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+
+import net.runelite.api.*;
+import net.runelite.api.events.ScriptPostFired;
+import net.runelite.api.widgets.ComponentID;
 
 @Slf4j
 @PluginDescriptor(
@@ -22,32 +26,124 @@ public class ExamplePlugin extends Plugin
 	private Client client;
 
 	@Inject
+	private ClientThread clientThread;
+
+	@Inject
 	private ExampleConfig config;
 
-	@Override
-	protected void startUp() throws Exception
-	{
-		log.debug("Example started!");
-	}
-
-	@Override
-	protected void shutDown() throws Exception
-	{
-		log.debug("Example stopped!");
-	}
-
-	@Subscribe
-	public void onGameStateChanged(GameStateChanged gameStateChanged)
-	{
-		if (gameStateChanged.getGameState() == GameState.LOGGED_IN)
-		{
-			client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", "Example says " + config.greeting(), null);
-		}
-	}
+	// Guards against a stale invokeLater callback running after a newer page
+	// navigation has already been handled (e.g. rapid double-click).
+	private boolean collectionLogDirty = false;
 
 	@Provides
 	ExampleConfig provideConfig(ConfigManager configManager)
 	{
 		return configManager.getConfig(ExampleConfig.class);
 	}
+
+	@Subscribe
+	public void onScriptPostFired(ScriptPostFired scriptPostFired)
+	{
+		if (scriptPostFired.getScriptId() != ScriptID.COLLECTION_DRAW_LIST)
+		{
+			return;
+		}
+
+		// Hide everything immediately so nothing incorrect is visible before the
+		// deferred layout runs.
+		Widget itemsContainer = client.getWidget(ComponentID.COLLECTION_LOG_ENTRY_ITEMS);
+		if (itemsContainer != null)
+		{
+			for (Widget item : itemsContainer.getDynamicChildren())
+			{
+				item.setHidden(true);
+			}
+		}
+
+		collectionLogDirty = true;
+		clientThread.invokeLater(this::layoutCollectionLog);
+	}
+
+	private void layoutCollectionLog()
+	{
+		if (!collectionLogDirty)
+		{
+			return;
+		}
+		collectionLogDirty = false;
+
+		Widget pageHead = client.getWidget(ComponentID.COLLECTION_LOG_ENTRY_HEADER);
+		if (pageHead == null)
+		{
+			return;
+		}
+
+		Widget itemsContainer = client.getWidget(ComponentID.COLLECTION_LOG_ENTRY_ITEMS);
+		if (itemsContainer == null)
+		{
+			return;
+		}
+
+		Widget[] items = itemsContainer.getDynamicChildren();
+		if (items.length == 0)
+		{
+			return;
+		}
+
+		// Read originalX/Y (game-set, unaffected by our setForcedPosition calls) so
+		// that stride computation is correct even if this layout runs more than once.
+		int itemWidth = items[0].getWidth();
+		int itemHeight = items[0].getHeight();
+		int startX = items[0].getOriginalX();
+		int startY = items[0].getOriginalY();
+
+		int strideX = itemWidth;
+		int strideY = itemHeight;
+		if (items.length > 1)
+		{
+			if (items[1].getOriginalY() == startY)
+			{
+				strideX = items[1].getOriginalX() - startX;
+			}
+			else
+			{
+				strideY = items[1].getOriginalY() - startY;
+			}
+		}
+
+		int columns = itemsContainer.getWidth() / (strideX > 0 ? strideX : 1);
+
+		// Derive strideY from the first item on the second row (includes vertical padding).
+		if (items.length > columns && columns > 0)
+		{
+			int secondRowY = items[columns].getOriginalY();
+			if (secondRowY != startY)
+			{
+				strideY = secondRowY - startY;
+			}
+		}
+
+		int slot = 0;
+		for (Widget item : items)
+		{
+			boolean isObtained = item.getItemQuantity() > 0;
+			if (isObtained)
+			{
+				item.setHidden(true);
+			}
+			else
+			{
+				// setForcedPosition overrides relativeX/Y even after clientscript
+				// revalidation, so repositioning scripts can't clobber our layout.
+				item.setForcedPosition(
+					startX + (slot % columns) * strideX,
+					startY + (slot / columns) * strideY
+				);
+				item.setHidden(false);
+				item.setOpacity(0);
+				slot++;
+			}
+		}
+	}
+
 }

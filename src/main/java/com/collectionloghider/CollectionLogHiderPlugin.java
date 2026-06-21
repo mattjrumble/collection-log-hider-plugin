@@ -7,6 +7,7 @@ import net.runelite.api.Client;
 import net.runelite.api.MenuAction;
 import net.runelite.api.ScriptID;
 import net.runelite.api.events.ScriptPostFired;
+import net.runelite.api.events.ScriptPreFired;
 import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.events.WidgetLoaded;
 import net.runelite.api.gameval.InterfaceID;
@@ -82,10 +83,44 @@ public class CollectionLogHiderPlugin extends Plugin
 		InterfaceID.Collection.OTHER_CONTAINER,
 	};
 
+	// Scrollbar widgets paired 1:1 with CONTAINER_WIDGETS.
+	private static final int[] SCROLLBAR_WIDGETS = {
+		InterfaceID.Collection.BOSS_SCROLLBAR,
+		InterfaceID.Collection.RAID_SCROLLBAR,
+		InterfaceID.Collection.CLUE_SCROLLBAR,
+		InterfaceID.Collection.MINIGAME_SCROLLBAR,
+		InterfaceID.Collection.OTHER_SCROLLBAR,
+	};
+
+	// Section-list scroll Y saved just before COLLECTION_DRAW_LIST runs, so we can
+	// restore it afterwards. -1 means no save is pending.
+	private int savedSectionScrollY = -1;
+
 	@Provides
 	CollectionLogHiderConfig provideConfig(ConfigManager configManager)
 	{
 		return configManager.getConfig(CollectionLogHiderConfig.class);
+	}
+
+	// Capture the section-list scroll position before the game script can change it.
+	@Subscribe
+	public void onScriptPreFired(ScriptPreFired scriptPreFired)
+	{
+		if (scriptPreFired.getScriptId() != ScriptID.COLLECTION_DRAW_LIST || !config.hideCompletedSections())
+		{
+			return;
+		}
+		for (int i = 0; i < CONTAINER_WIDGETS.length; i++)
+		{
+			Widget textWidget = client.getWidget(TITLE_WIDGETS[i]);
+			Widget containerWidget = client.getWidget(CONTAINER_WIDGETS[i]);
+			if (textWidget == null || containerWidget == null || textWidget.isHidden())
+			{
+				continue;
+			}
+			savedSectionScrollY = containerWidget.getScrollY();
+			break;
+		}
 	}
 
 	@Subscribe
@@ -265,6 +300,26 @@ public class CollectionLogHiderPlugin extends Plugin
 				}
 			}
 		}
+
+		if (config.hideObtainedItems() && columns > 0)
+		{
+			int numRows = (slot + columns - 1) / columns;
+			int newScrollHeight = numRows > 0
+				? startY + (numRows - 1) * strideY + itemHeight
+				: 0;
+			// Prevent tiny scroll-wiggle: round down if overflow is less than one row.
+			if (numRows > 0 && newScrollHeight < itemsContainer.getHeight() + strideY)
+			{
+				newScrollHeight = itemsContainer.getHeight();
+			}
+			itemsContainer.setScrollHeight(newScrollHeight);
+			// invokeAtTickEnd runs after all scripts complete but before the frame renders,
+			// so UPDATE_SCROLLBAR sees our corrected height with no visible flash.
+			clientThread.invokeAtTickEnd(() -> client.runScript(ScriptID.UPDATE_SCROLLBAR,
+				InterfaceID.Collection.ITEMS_SCROLLBAR,
+				InterfaceID.Collection.ITEMS_CONTENTS,
+				0));
+		}
 	}
 
 	private void updateObtainedText(Widget headerText)
@@ -387,8 +442,29 @@ public class CollectionLogHiderPlugin extends Plugin
 			int newScrollHeight = slot > 0
 				? startY + (slot - 1) * strideY + bgChildren[0].getOriginalHeight()
 				: 0;
+			// Prevent tiny scroll-wiggle: if the overflow is less than one full row
+			// (e.g. due to a top margin), round down to the container height so the
+			// scrollbar thumb fills the track with no drag room.
+			if (slot > 0 && newScrollHeight < containerWidget.getHeight() + strideY)
+			{
+				newScrollHeight = containerWidget.getHeight();
+			}
 			containerWidget.setScrollHeight(newScrollHeight);
-			containerWidget.revalidateScroll();
+
+			// Clamp the desired scroll position to the new valid range.
+			int maxScrollY = Math.max(0, newScrollHeight - containerWidget.getHeight());
+			int scrollY = savedSectionScrollY >= 0
+				? Math.min(savedSectionScrollY, maxScrollY)
+				: Math.min(containerWidget.getScrollY(), maxScrollY);
+			savedSectionScrollY = -1;
+			containerWidget.setScrollY(scrollY);
+
+			// invokeAtTickEnd runs after all scripts complete but before the frame renders,
+			// so UPDATE_SCROLLBAR sees our corrected height with no visible flash.
+			final int scrollbarId = SCROLLBAR_WIDGETS[i];
+			final int containerId = CONTAINER_WIDGETS[i];
+			clientThread.invokeAtTickEnd(() ->
+				client.runScript(ScriptID.UPDATE_SCROLLBAR, scrollbarId, containerId, scrollY));
 			break;
 		}
 	}

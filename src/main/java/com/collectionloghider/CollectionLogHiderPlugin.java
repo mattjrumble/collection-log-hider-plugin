@@ -10,6 +10,7 @@ import net.runelite.api.events.ScriptPostFired;
 import net.runelite.api.events.ScriptPreFired;
 import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.events.WidgetLoaded;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.JavaScriptCallback;
@@ -96,10 +97,74 @@ public class CollectionLogHiderPlugin extends Plugin
 	// restore it afterwards. -1 means no save is pending.
 	private int savedSectionScrollY = -1;
 
+	// Per-tab startY and strideY saved during filterSectionTitles(), used by
+	// restoreSectionTitles() in shutDown() to put section titles back where they were.
+	private final int[] sectionListStartY  = new int[TITLE_WIDGETS.length];
+	private final int[] sectionListStrideY = new int[TITLE_WIDGETS.length];
+
 	@Provides
 	CollectionLogHiderConfig provideConfig(ConfigManager configManager)
 	{
 		return configManager.getConfig(CollectionLogHiderConfig.class);
+	}
+
+	@Override
+	protected void startUp()
+	{
+		clientThread.invoke(() ->
+		{
+			Widget frame = client.getWidget(InterfaceID.Collection.FRAME);
+			if (frame == null || frame.isHidden())
+			{
+				return;
+			}
+			if (config.hideCompletedSections())
+			{
+				filterSectionTitles();
+			}
+			// Re-trigger the displayed section so our handler applies the plugin's
+			// changes. Falls back to first visible section if the current section
+			// cannot be identified (e.g. search tab is open).
+			if (!retriggerCurrentSection())
+			{
+				navigateToFirstVisible();
+			}
+		});
+	}
+
+	@Override
+	protected void shutDown()
+	{
+		clientThread.invoke(() ->
+		{
+			Widget frame = client.getWidget(InterfaceID.Collection.FRAME);
+			if (frame == null || frame.isHidden())
+			{
+				return;
+			}
+			// Restore the section-title sidebar before touching the items panel.
+			restoreSectionTitles();
+			// Re-trigger the current section. Subscriptions are already unregistered at
+			// shutDown() time, so COLLECTION_DRAW_LIST fires without our modifications.
+			if (!retriggerCurrentSection())
+			{
+				for (int i = 0; i < BACKGROUND_WIDGETS.length; i++)
+				{
+					Widget bgWidget = client.getWidget(BACKGROUND_WIDGETS[i]);
+					if (bgWidget == null || bgWidget.isHidden())
+					{
+						continue;
+					}
+					Widget[] bgChildren = bgWidget.getDynamicChildren();
+					if (bgChildren == null || bgChildren.length == 0)
+					{
+						continue;
+					}
+					client.menuAction(0, bgWidget.getId(), MenuAction.CC_OP, 1, -1, "Check", "");
+					break;
+				}
+			}
+		});
 	}
 
 	// Capture the section-list scroll position before the game script can change it.
@@ -189,6 +254,27 @@ public class CollectionLogHiderPlugin extends Plugin
 			return;
 		}
 		clientThread.invokeLater(this::filterSectionTitles);
+	}
+
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if (!event.getGroup().equals(CollectionLogHiderConfig.GROUP))
+		{
+			return;
+		}
+		clientThread.invoke(() ->
+		{
+			Widget frame = client.getWidget(InterfaceID.Collection.FRAME);
+			if (frame == null || frame.isHidden())
+			{
+				return;
+			}
+			if (!retriggerCurrentSection())
+			{
+				navigateToFirstVisible();
+			}
+		});
 	}
 
 	// Fires when the active tab changes (COLLECTION_LAST_TAB varbit).
@@ -402,6 +488,9 @@ public class CollectionLogHiderPlugin extends Plugin
 				}
 			}
 
+			sectionListStartY[i]  = startY;
+			sectionListStrideY[i] = strideY;
+
 			int count = Math.min(textChildren.length, bgChildren.length);
 
 			int slot = 0;
@@ -469,6 +558,114 @@ public class CollectionLogHiderPlugin extends Plugin
 		}
 	}
 
+	// Reads the section name from the header widget, finds its background child in
+	// the active tab, and simulates a click on it. Returns false if the current
+	// section cannot be identified (e.g. no section is shown yet).
+	private boolean retriggerCurrentSection()
+	{
+		Widget pageHead = client.getWidget(InterfaceID.Collection.HEADER_TEXT);
+		if (pageHead == null)
+		{
+			return false;
+		}
+		Widget[] headChildren = pageHead.getChildren();
+		if (headChildren == null)
+		{
+			return false;
+		}
+		String sectionName = null;
+		for (Widget child : headChildren)
+		{
+			String text = child.getText();
+			if (text == null || text.isEmpty()
+				|| text.startsWith("Obtained: ")
+				|| text.startsWith("Remaining: ")
+				|| OBTAINED_PATTERN.matcher(text).find())
+			{
+				continue;
+			}
+			sectionName = text;
+			break;
+		}
+		if (sectionName == null)
+		{
+			return false;
+		}
+		for (int i = 0; i < TITLE_WIDGETS.length; i++)
+		{
+			Widget textWidget = client.getWidget(TITLE_WIDGETS[i]);
+			if (textWidget == null || textWidget.isHidden())
+			{
+				continue;
+			}
+			Widget[] textChildren = textWidget.getDynamicChildren();
+			if (textChildren == null)
+			{
+				break;
+			}
+			for (int j = 0; j < textChildren.length; j++)
+			{
+				if (sectionName.equals(textChildren[j].getText()))
+				{
+					client.menuAction(j, BACKGROUND_WIDGETS[i], MenuAction.CC_OP, 1, -1, "Check", "");
+					return true;
+				}
+			}
+			break;
+		}
+		return false;
+	}
+
+	private void restoreSectionTitles()
+	{
+		for (int i = 0; i < TITLE_WIDGETS.length; i++)
+		{
+			if (sectionListStrideY[i] == 0)
+			{
+				continue;
+			}
+			Widget textWidget = client.getWidget(TITLE_WIDGETS[i]);
+			Widget bgWidget = client.getWidget(BACKGROUND_WIDGETS[i]);
+			Widget containerWidget = client.getWidget(CONTAINER_WIDGETS[i]);
+			if (textWidget == null || bgWidget == null || containerWidget == null)
+			{
+				continue;
+			}
+			Widget[] textChildren = textWidget.getDynamicChildren();
+			Widget[] bgChildren = bgWidget.getDynamicChildren();
+			if (textChildren == null || bgChildren == null)
+			{
+				continue;
+			}
+			int count = Math.min(textChildren.length, bgChildren.length);
+			int startY = sectionListStartY[i];
+			int strideY = sectionListStrideY[i];
+			for (int j = 0; j < count; j++)
+			{
+				int origY = startY + j * strideY;
+				textChildren[j].setHidden(false);
+				textChildren[j].setOriginalY(origY);
+				textChildren[j].revalidate();
+				bgChildren[j].setHidden(false);
+				bgChildren[j].setOriginalY(origY);
+				bgChildren[j].revalidate();
+			}
+			if (count > 0)
+			{
+				int fullHeight = startY + (count - 1) * strideY + bgChildren[0].getOriginalHeight();
+				containerWidget.setScrollHeight(fullHeight);
+				int newScrollY = Math.min(containerWidget.getScrollY(),
+					Math.max(0, fullHeight - containerWidget.getHeight()));
+				containerWidget.setScrollY(newScrollY);
+				final int sbId = SCROLLBAR_WIDGETS[i];
+				final int cId = CONTAINER_WIDGETS[i];
+				final int sy = newScrollY;
+				clientThread.invokeAtTickEnd(() ->
+					client.runScript(ScriptID.UPDATE_SCROLLBAR, sbId, cId, sy));
+			}
+		}
+	}
+
 	private boolean isCurrentSectionCompleted()
 	{
 		Widget itemsContainer = client.getWidget(InterfaceID.Collection.ITEMS_CONTENTS);
@@ -511,8 +708,6 @@ public class CollectionLogHiderPlugin extends Plugin
 			{
 				if (!bgChildren[j].isHidden())
 				{
-					// Simulate a "Check" click on this child. The background widget is an
-					// IF3 list component: param0 = child index, param1 = widget ID.
 					client.menuAction(j, bgWidget.getId(), MenuAction.CC_OP, 1, -1, "Check", "");
 					return;
 				}

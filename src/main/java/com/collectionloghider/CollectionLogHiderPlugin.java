@@ -9,7 +9,6 @@ import net.runelite.api.ScriptID;
 import net.runelite.api.events.ScriptPostFired;
 import net.runelite.api.events.ScriptPreFired;
 import net.runelite.api.events.VarbitChanged;
-import net.runelite.api.events.WidgetLoaded;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
@@ -53,9 +52,12 @@ public class CollectionLogHiderPlugin extends Plugin
 	private static final int SELECTED_OPACITY = 200;
 	// Amount by which opacity decreases on hover (applied to both normal and selected rows).
 	private static final int HOVER_DELTA = 40;
-
-	// Collection interface group ID, used for WidgetLoaded.
-	private static final int COLLECTION_GROUP_ID = InterfaceID.Collection.FRAME >> 16;
+	// Opacity applied to obtained items when switchItemOpacity is enabled.
+	private static final int SWITCH_OBTAINED_OPACITY = 175;
+	// Y position used to move hidden section rows off-screen.
+	private static final int HIDDEN_Y = -10000;
+	// Extra width added to the "Remaining:" header widget to prevent text wrapping.
+	private static final int REMAINING_TEXT_EXTRA_WIDTH = 20;
 
 	// Text layer: holds section name text and the completion color used for filtering.
 	private static final int[] TITLE_WIDGETS = {
@@ -247,17 +249,6 @@ public class CollectionLogHiderPlugin extends Plugin
 		layoutCollectionLog();
 	}
 
-	// Fires when the collection log interface is first opened.
-	@Subscribe
-	public void onWidgetLoaded(WidgetLoaded widgetLoaded)
-	{
-		if (widgetLoaded.getGroupId() != COLLECTION_GROUP_ID || !config.hideCompletedSections())
-		{
-			return;
-		}
-		clientThread.invokeLater(this::filterSectionTitles);
-	}
-
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
@@ -372,7 +363,7 @@ public class CollectionLogHiderPlugin extends Plugin
 				}
 				if (config.switchItemOpacity())
 				{
-					item.setOpacity(175);
+					item.setOpacity(SWITCH_OBTAINED_OPACITY);
 				}
 			}
 			else
@@ -439,7 +430,7 @@ public class CollectionLogHiderPlugin extends Plugin
 				int remaining = total - obtained;
 				// "Remaining: " is wider than "Obtained: " — expand the widget so the
 				// number doesn't wrap to a new line.
-				child.setOriginalWidth(child.getOriginalWidth() + 20);
+				child.setOriginalWidth(child.getOriginalWidth() + REMAINING_TEXT_EXTRA_WIDTH);
 				child.revalidate();
 				child.setText(m.replaceFirst("Remaining: " + m.group(1) + remaining + "/" + total + m.group(4)));
 				break;
@@ -475,7 +466,7 @@ public class CollectionLogHiderPlugin extends Plugin
 			}
 
 			// Detect stride from background children — they drive click detection.
-			// Skip children already moved to -10000 by a previous call.
+			// Skip children already moved to HIDDEN_Y by a previous call.
 			int startY = 0, prevY = Integer.MIN_VALUE;
 			int strideY = bgChildren[0].getOriginalHeight();
 			for (Widget child : bgChildren)
@@ -512,10 +503,10 @@ public class CollectionLogHiderPlugin extends Plugin
 				if (textChild.getTextColor() == COMPLETED_TEXT_COLOR)
 				{
 					textChild.setHidden(true);
-					textChild.setOriginalY(-10000);
+					textChild.setOriginalY(HIDDEN_Y);
 					textChild.revalidate();
 					bgChild.setHidden(true);
-					bgChild.setOriginalY(-10000);
+					bgChild.setOriginalY(HIDDEN_Y);
 					bgChild.revalidate();
 				}
 				else
@@ -700,31 +691,38 @@ public class CollectionLogHiderPlugin extends Plugin
 		}
 	}
 
-	// Returns true if every item in the currently displayed section is obtained.
-	// The game signals obtained items by setting their opacity to 0; any non-zero
-	// opacity means at least one item is still missing.
+	// Returns true if the currently displayed section's title has the completed
+	// text colour (COMPLETED_TEXT_COLOR), which the game sets when all items in
+	// the section have been obtained.
 	private boolean isCurrentSectionCompleted()
 	{
-		Widget itemsContainer = client.getWidget(InterfaceID.Collection.ITEMS_CONTENTS);
-		if (itemsContainer == null)
+		String sectionName = getCurrentSectionName();
+		if (sectionName == null)
 		{
 			return false;
 		}
-		Widget[] items = itemsContainer.getDynamicChildren();
-		if (items == null || items.length == 0)
+		for (int i = 0; i < TITLE_WIDGETS.length; i++)
 		{
-			return false;
-		}
-		for (Widget item : items)
-		{
-			// The game sets opacity=0 for obtained items, non-zero for unobtained.
-			// If any item is unobtained, the section is incomplete.
-			if (item.getOpacity() != 0)
+			Widget textWidget = client.getWidget(TITLE_WIDGETS[i]);
+			if (textWidget == null || textWidget.isHidden())
 			{
-				return false;
+				continue;
 			}
+			Widget[] textChildren = textWidget.getDynamicChildren();
+			if (textChildren == null)
+			{
+				break;
+			}
+			for (Widget textChild : textChildren)
+			{
+				if (sectionName.equals(textChild.getText()))
+				{
+					return textChild.getTextColor() == COMPLETED_TEXT_COLOR;
+				}
+			}
+			break;
 		}
-		return true;
+		return false;
 	}
 
 	// Simulates a click on the first non-hidden background child in the active tab,

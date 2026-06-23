@@ -49,8 +49,10 @@ public class CollectionLogHiderPlugin extends Plugin
 	// Opacity values the game applies to alternate log section titles.
 	private static final int OPACITY_1 = 235;
 	private static final int OPACITY_2 = 255;
-	// Amount by which opacity decreases on hover.
-	private static final int HOVER_DELTA = 60;
+	// Absolute opacity the game applies to the currently open section title.
+	private static final int SELECTED_OPACITY = 200;
+	// Amount by which opacity decreases on hover (applied to both normal and selected rows).
+	private static final int HOVER_DELTA = 40;
 
 	// Collection interface group ID, used for WidgetLoaded.
 	private static final int COLLECTION_GROUP_ID = InterfaceID.Collection.FRAME >> 16;
@@ -493,6 +495,7 @@ public class CollectionLogHiderPlugin extends Plugin
 
 			int count = Math.min(textChildren.length, bgChildren.length);
 
+			String selectedSectionName = getCurrentSectionName();
 			int slot = 0;
 			for (int j = 0; j < count; j++)
 			{
@@ -516,13 +519,27 @@ public class CollectionLogHiderPlugin extends Plugin
 					textChild.revalidate();
 					int rowOpacity = slot % 2 == 0 ? OPACITY_1 : OPACITY_2;
 					int hoverOpacity = Math.max(0, rowOpacity - HOVER_DELTA);
+					boolean isSelected = selectedSectionName != null
+						&& selectedSectionName.equals(textChild.getText());
+					// The selected section rests at SELECTED_OPACITY (an absolute value
+					// shared by both row colours) and returns to it after hover.
+					final int restingOpacity = isSelected ? SELECTED_OPACITY : rowOpacity;
 					bgChild.setHidden(false);
 					bgChild.setOriginalY(newY);
-					bgChild.setOpacity(rowOpacity);
+					bgChild.setOpacity(restingOpacity);
 					// Replace the game's index-based hover listeners with ones that use the
 					// slot-based opacity as the base, so the highlight is correct for moved rows.
-					bgChild.setOnMouseOverListener((JavaScriptCallback) ev -> ev.getSource().setOpacity(hoverOpacity));
-					bgChild.setOnMouseLeaveListener((JavaScriptCallback) ev -> ev.getSource().setOpacity(rowOpacity));
+					// The selected section is pinned at SELECTED_OPACITY regardless of hover.
+					if (isSelected)
+					{
+						bgChild.setOnMouseOverListener((JavaScriptCallback) ev -> ev.getSource().setOpacity(SELECTED_OPACITY));
+						bgChild.setOnMouseLeaveListener((JavaScriptCallback) ev -> ev.getSource().setOpacity(SELECTED_OPACITY));
+					}
+					else
+					{
+						bgChild.setOnMouseOverListener((JavaScriptCallback) ev -> ev.getSource().setOpacity(hoverOpacity));
+						bgChild.setOnMouseLeaveListener((JavaScriptCallback) ev -> ev.getSource().setOpacity(restingOpacity));
+					}
 					bgChild.revalidate();
 					slot++;
 				}
@@ -558,22 +575,20 @@ public class CollectionLogHiderPlugin extends Plugin
 		}
 	}
 
-	// Reads the section name from the header widget, finds its background child in
-	// the active tab, and simulates a click on it. Returns false if the current
-	// section cannot be identified (e.g. no section is shown yet).
-	private boolean retriggerCurrentSection()
+	// Returns the name of the currently displayed section from the header widget,
+	// or null if no section is shown (e.g. collection log is closed or loading).
+	private String getCurrentSectionName()
 	{
 		Widget pageHead = client.getWidget(InterfaceID.Collection.HEADER_TEXT);
 		if (pageHead == null)
 		{
-			return false;
+			return null;
 		}
 		Widget[] headChildren = pageHead.getChildren();
 		if (headChildren == null)
 		{
-			return false;
+			return null;
 		}
-		String sectionName = null;
 		for (Widget child : headChildren)
 		{
 			String text = child.getText();
@@ -584,9 +599,17 @@ public class CollectionLogHiderPlugin extends Plugin
 			{
 				continue;
 			}
-			sectionName = text;
-			break;
+			return text;
 		}
+		return null;
+	}
+
+	// Reads the section name from the header widget, finds its background child in
+	// the active tab, and simulates a click on it. Returns false if the current
+	// section cannot be identified (e.g. no section is shown yet).
+	private boolean retriggerCurrentSection()
+	{
+		String sectionName = getCurrentSectionName();
 		if (sectionName == null)
 		{
 			return false;

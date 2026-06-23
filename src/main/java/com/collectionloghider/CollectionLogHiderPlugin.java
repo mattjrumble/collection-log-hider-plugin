@@ -290,6 +290,10 @@ public class CollectionLogHiderPlugin extends Plugin
 		clientThread.invokeLater(this::filterSectionTitles);
 	}
 
+	// Applies all item-panel transformations for the currently displayed section:
+	// hides obtained items and/or collapses them into a compact grid, swaps item
+	// opacities when switchItemOpacity is on, rewrites the "Obtained: X/Y" header
+	// to "Remaining: (Y-X)/Y", and trims the scroll height to the new content size.
 	private void layoutCollectionLog()
 	{
 		Widget pageHead = client.getWidget(InterfaceID.Collection.HEADER_TEXT);
@@ -410,6 +414,8 @@ public class CollectionLogHiderPlugin extends Plugin
 		}
 	}
 
+	// Rewrites the "Obtained: X/Y" child widget inside the section header to
+	// "Remaining: (Y-X)/Y".
 	private void updateObtainedText(Widget headerText)
 	{
 		Widget[] children = headerText.getChildren();
@@ -438,14 +444,15 @@ public class CollectionLogHiderPlugin extends Plugin
 				child.setText(m.replaceFirst("Remaining: " + m.group(1) + remaining + "/" + total + m.group(4)));
 				break;
 			}
-			if (text.startsWith("Obtained: "))
-			{
-				child.setText("");
-				break;
-			}
 		}
 	}
 
+	// Hides the section-title rows that are fully completed (green text) and
+	// repacks the remaining rows into a contiguous list. Also rewrites each
+	// background child's opacity and hover listeners so the alternating-stripe
+	// and selected-highlight colours stay correct after rows are removed.
+	// Shrinks the container's scroll height to fit the new row count and restores
+	// the saved scroll position (captured in onScriptPreFired) within the new range.
 	private void filterSectionTitles()
 	{
 		for (int i = 0; i < TITLE_WIDGETS.length; i++)
@@ -639,6 +646,10 @@ public class CollectionLogHiderPlugin extends Plugin
 		return false;
 	}
 
+	// Undoes the changes made by filterSectionTitles(): un-hides every row,
+	// restores each row to its original Y position, and restores the container's
+	// scroll height. Called on plugin shutdown so the sidebar is left in the same
+	// state the game would have produced without the plugin.
 	private void restoreSectionTitles()
 	{
 		for (int i = 0; i < TITLE_WIDGETS.length; i++)
@@ -689,6 +700,9 @@ public class CollectionLogHiderPlugin extends Plugin
 		}
 	}
 
+	// Returns true if every item in the currently displayed section is obtained.
+	// The game signals obtained items by setting their opacity to 0; any non-zero
+	// opacity means at least one item is still missing.
 	private boolean isCurrentSectionCompleted()
 	{
 		Widget itemsContainer = client.getWidget(InterfaceID.Collection.ITEMS_CONTENTS);
@@ -713,6 +727,10 @@ public class CollectionLogHiderPlugin extends Plugin
 		return true;
 	}
 
+	// Simulates a click on the first non-hidden background child in the active tab,
+	// causing the game to load that section's items. Used when the previously open
+	// section is no longer visible (e.g. it was completed and hidden, or the plugin
+	// just started and no section has been opened yet).
 	private void navigateToFirstVisible()
 	{
 		for (int i = 0; i < BACKGROUND_WIDGETS.length; i++)

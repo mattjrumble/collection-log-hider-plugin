@@ -8,10 +8,8 @@ import net.runelite.api.MenuAction;
 import net.runelite.api.ScriptID;
 import net.runelite.api.events.ScriptPostFired;
 import net.runelite.api.events.ScriptPreFired;
-import net.runelite.api.events.VarbitChanged;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.api.gameval.InterfaceID;
-import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.JavaScriptCallback;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
@@ -152,21 +150,7 @@ public class CollectionLogHiderPlugin extends Plugin
 			// shutDown() time, so COLLECTION_DRAW_LIST fires without our modifications.
 			if (!retriggerCurrentSection())
 			{
-				for (int i = 0; i < BACKGROUND_WIDGETS.length; i++)
-				{
-					Widget bgWidget = client.getWidget(BACKGROUND_WIDGETS[i]);
-					if (bgWidget == null || bgWidget.isHidden())
-					{
-						continue;
-					}
-					Widget[] bgChildren = bgWidget.getDynamicChildren();
-					if (bgChildren == null || bgChildren.length == 0)
-					{
-						continue;
-					}
-					client.menuAction(0, bgWidget.getId(), MenuAction.CC_OP, 1, -1, "Check", "");
-					break;
-				}
+				navigateToFirstVisible();
 			}
 		});
 	}
@@ -268,17 +252,6 @@ public class CollectionLogHiderPlugin extends Plugin
 				navigateToFirstVisible();
 			}
 		});
-	}
-
-	// Fires when the active tab changes (COLLECTION_LAST_TAB varbit).
-	@Subscribe
-	public void onVarbitChanged(VarbitChanged varbitChanged)
-	{
-		if (varbitChanged.getVarbitId() != VarbitID.COLLECTION_LAST_TAB || !config.hideCompletedSections())
-		{
-			return;
-		}
-		clientThread.invokeLater(this::filterSectionTitles);
 	}
 
 	// Applies all item-panel transformations for the currently displayed section:
@@ -592,8 +565,7 @@ public class CollectionLogHiderPlugin extends Plugin
 			String text = child.getText();
 			if (text == null || text.isEmpty()
 				|| text.startsWith("Obtained: ")
-				|| text.startsWith("Remaining: ")
-				|| OBTAINED_PATTERN.matcher(text).find())
+				|| text.startsWith("Remaining: "))
 			{
 				continue;
 			}

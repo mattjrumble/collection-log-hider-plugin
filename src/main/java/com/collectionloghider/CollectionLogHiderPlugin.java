@@ -4,11 +4,8 @@ import com.google.inject.Provides;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
-import net.runelite.api.MenuAction;
 import net.runelite.api.ScriptID;
 import net.runelite.api.events.ScriptPostFired;
-import net.runelite.api.events.ScriptPreFired;
-import net.runelite.client.events.ConfigChanged;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.JavaScriptCallback;
 import net.runelite.api.widgets.Widget;
@@ -95,85 +92,10 @@ public class CollectionLogHiderPlugin extends Plugin
 		InterfaceID.Collection.OTHER_SCROLLBAR,
 	};
 
-	// Section-list scroll Y saved just before COLLECTION_DRAW_LIST runs, so we can
-	// restore it afterwards. -1 means no save is pending.
-	private int savedSectionScrollY = -1;
-
-	// Per-tab startY and strideY saved during filterSectionTitles(), used by
-	// restoreSectionTitles() in shutDown() to put section titles back where they were.
-	private final int[] sectionListStartY  = new int[TITLE_WIDGETS.length];
-	private final int[] sectionListStrideY = new int[TITLE_WIDGETS.length];
-
 	@Provides
 	CollectionLogHiderConfig provideConfig(ConfigManager configManager)
 	{
 		return configManager.getConfig(CollectionLogHiderConfig.class);
-	}
-
-	@Override
-	protected void startUp()
-	{
-		clientThread.invoke(() ->
-		{
-			Widget frame = client.getWidget(InterfaceID.Collection.FRAME);
-			if (frame == null || frame.isHidden())
-			{
-				return;
-			}
-			if (config.hideCompletedSections())
-			{
-				filterSectionTitles();
-			}
-			// Re-trigger the displayed section so our handler applies the plugin's
-			// changes. Falls back to first visible section if the current section
-			// cannot be identified (e.g. search tab is open).
-			if (!retriggerCurrentSection())
-			{
-				navigateToFirstVisible();
-			}
-		});
-	}
-
-	@Override
-	protected void shutDown()
-	{
-		clientThread.invoke(() ->
-		{
-			Widget frame = client.getWidget(InterfaceID.Collection.FRAME);
-			if (frame == null || frame.isHidden())
-			{
-				return;
-			}
-			// Restore the section-title sidebar before touching the items panel.
-			restoreSectionTitles();
-			// Re-trigger the current section. Subscriptions are already unregistered at
-			// shutDown() time, so COLLECTION_DRAW_LIST fires without our modifications.
-			if (!retriggerCurrentSection())
-			{
-				navigateToFirstVisible();
-			}
-		});
-	}
-
-	// Capture the section-list scroll position before the game script can change it.
-	@Subscribe
-	public void onScriptPreFired(ScriptPreFired scriptPreFired)
-	{
-		if (scriptPreFired.getScriptId() != ScriptID.COLLECTION_DRAW_LIST || !config.hideCompletedSections())
-		{
-			return;
-		}
-		for (int i = 0; i < CONTAINER_WIDGETS.length; i++)
-		{
-			Widget textWidget = client.getWidget(TITLE_WIDGETS[i]);
-			Widget containerWidget = client.getWidget(CONTAINER_WIDGETS[i]);
-			if (textWidget == null || containerWidget == null || textWidget.isHidden())
-			{
-				continue;
-			}
-			savedSectionScrollY = containerWidget.getScrollY();
-			break;
-		}
 	}
 
 	@Subscribe
@@ -184,7 +106,6 @@ public class CollectionLogHiderPlugin extends Plugin
 			return;
 		}
 
-		// Update header text immediately to avoid a flash of "Obtained: X/Y".
 		if (config.showRemainingCount())
 		{
 			Widget pageHead = client.getWidget(InterfaceID.Collection.HEADER_TEXT);
@@ -194,64 +115,26 @@ public class CollectionLogHiderPlugin extends Plugin
 			}
 		}
 
-		// Hide everything immediately so nothing incorrect is visible before the
-		// deferred layout runs.
-		if (config.hideObtainedItems())
-		{
-			Widget itemsContainer = client.getWidget(InterfaceID.Collection.ITEMS_CONTENTS);
-			if (itemsContainer != null)
-			{
-				for (Widget item : itemsContainer.getDynamicChildren())
-				{
-					item.setHidden(true);
-				}
-			}
-		}
-
 		if (config.hideCompletedSections())
 		{
 			filterSectionTitles();
 			// If every item in the section is obtained (opacity == 0), the game
 			// auto-opened a completed section on tab switch or tab re-click.
-			// Navigate to the first visible section instead.
 			if (isCurrentSectionCompleted())
 			{
 				// Hide the entire right-hand panel (header, section title, obtained text,
-				// items grid) so nothing from the wrong section is visible during the one
-				// tick it takes for navigateToFirstVisible() to load the correct section.
+				// items grid) so nothing from the wrong section is visible.
 				// layoutCollectionLog() un-hides MAIN when the correct section fires.
 				Widget main = client.getWidget(InterfaceID.Collection.MAIN);
 				if (main != null)
 				{
 					main.setHidden(true);
 				}
-				navigateToFirstVisible();
 				return;
 			}
 		}
 
 		layoutCollectionLog();
-	}
-
-	@Subscribe
-	public void onConfigChanged(ConfigChanged event)
-	{
-		if (!event.getGroup().equals(CollectionLogHiderConfig.GROUP))
-		{
-			return;
-		}
-		clientThread.invoke(() ->
-		{
-			Widget frame = client.getWidget(InterfaceID.Collection.FRAME);
-			if (frame == null || frame.isHidden())
-			{
-				return;
-			}
-			if (!retriggerCurrentSection())
-			{
-				navigateToFirstVisible();
-			}
-		});
 	}
 
 	// Applies all item-panel transformations for the currently displayed section:
@@ -264,11 +147,6 @@ public class CollectionLogHiderPlugin extends Plugin
 		if (pageHead == null)
 		{
 			return;
-		}
-
-		if (config.showRemainingCount())
-		{
-			updateObtainedText(pageHead);
 		}
 
 		// Undo the hide applied in onScriptPostFired when a completed section was
@@ -461,9 +339,6 @@ public class CollectionLogHiderPlugin extends Plugin
 				}
 			}
 
-			sectionListStartY[i]  = startY;
-			sectionListStrideY[i] = strideY;
-
 			int count = Math.min(textChildren.length, bgChildren.length);
 
 			String selectedSectionName = getCurrentSectionName();
@@ -530,10 +405,7 @@ public class CollectionLogHiderPlugin extends Plugin
 
 			// Clamp the desired scroll position to the new valid range.
 			int maxScrollY = Math.max(0, newScrollHeight - containerWidget.getHeight());
-			int scrollY = savedSectionScrollY >= 0
-				? Math.min(savedSectionScrollY, maxScrollY)
-				: Math.min(containerWidget.getScrollY(), maxScrollY);
-			savedSectionScrollY = -1;
+			int scrollY = Math.min(containerWidget.getScrollY(), maxScrollY);
 			containerWidget.setScrollY(scrollY);
 
 			// invokeAtTickEnd runs after all scripts complete but before the frame renders,
@@ -562,105 +434,9 @@ public class CollectionLogHiderPlugin extends Plugin
 		}
 		for (Widget child : headChildren)
 		{
-			String text = child.getText();
-			if (text == null || text.isEmpty()
-				|| text.startsWith("Obtained: ")
-				|| text.startsWith("Remaining: "))
-			{
-				continue;
-			}
-			return text;
+			return child.getText();
 		}
 		return null;
-	}
-
-	// Reads the section name from the header widget, finds its background child in
-	// the active tab, and simulates a click on it. Returns false if the current
-	// section cannot be identified (e.g. no section is shown yet).
-	private boolean retriggerCurrentSection()
-	{
-		String sectionName = getCurrentSectionName();
-		if (sectionName == null)
-		{
-			return false;
-		}
-		for (int i = 0; i < TITLE_WIDGETS.length; i++)
-		{
-			Widget textWidget = client.getWidget(TITLE_WIDGETS[i]);
-			if (textWidget == null || textWidget.isHidden())
-			{
-				continue;
-			}
-			Widget[] textChildren = textWidget.getDynamicChildren();
-			if (textChildren == null)
-			{
-				break;
-			}
-			for (int j = 0; j < textChildren.length; j++)
-			{
-				if (sectionName.equals(textChildren[j].getText()))
-				{
-					client.menuAction(j, BACKGROUND_WIDGETS[i], MenuAction.CC_OP, 1, -1, "Check", "");
-					return true;
-				}
-			}
-			break;
-		}
-		return false;
-	}
-
-	// Undoes the changes made by filterSectionTitles(): un-hides every row,
-	// restores each row to its original Y position, and restores the container's
-	// scroll height. Called on plugin shutdown so the sidebar is left in the same
-	// state the game would have produced without the plugin.
-	private void restoreSectionTitles()
-	{
-		for (int i = 0; i < TITLE_WIDGETS.length; i++)
-		{
-			if (sectionListStrideY[i] == 0)
-			{
-				continue;
-			}
-			Widget textWidget = client.getWidget(TITLE_WIDGETS[i]);
-			Widget bgWidget = client.getWidget(BACKGROUND_WIDGETS[i]);
-			Widget containerWidget = client.getWidget(CONTAINER_WIDGETS[i]);
-			if (textWidget == null || bgWidget == null || containerWidget == null)
-			{
-				continue;
-			}
-			Widget[] textChildren = textWidget.getDynamicChildren();
-			Widget[] bgChildren = bgWidget.getDynamicChildren();
-			if (textChildren == null || bgChildren == null)
-			{
-				continue;
-			}
-			int count = Math.min(textChildren.length, bgChildren.length);
-			int startY = sectionListStartY[i];
-			int strideY = sectionListStrideY[i];
-			for (int j = 0; j < count; j++)
-			{
-				int origY = startY + j * strideY;
-				textChildren[j].setHidden(false);
-				textChildren[j].setOriginalY(origY);
-				textChildren[j].revalidate();
-				bgChildren[j].setHidden(false);
-				bgChildren[j].setOriginalY(origY);
-				bgChildren[j].revalidate();
-			}
-			if (count > 0)
-			{
-				int fullHeight = startY + (count - 1) * strideY + bgChildren[0].getOriginalHeight();
-				containerWidget.setScrollHeight(fullHeight);
-				int newScrollY = Math.min(containerWidget.getScrollY(),
-					Math.max(0, fullHeight - containerWidget.getHeight()));
-				containerWidget.setScrollY(newScrollY);
-				final int sbId = SCROLLBAR_WIDGETS[i];
-				final int cId = CONTAINER_WIDGETS[i];
-				final int sy = newScrollY;
-				clientThread.invokeAtTickEnd(() ->
-					client.runScript(ScriptID.UPDATE_SCROLLBAR, sbId, cId, sy));
-			}
-		}
 	}
 
 	// Returns true if the currently displayed section's title has the completed
@@ -696,35 +472,4 @@ public class CollectionLogHiderPlugin extends Plugin
 		}
 		return false;
 	}
-
-	// Simulates a click on the first non-hidden background child in the active tab,
-	// causing the game to load that section's items. Used when the previously open
-	// section is no longer visible (e.g. it was completed and hidden, or the plugin
-	// just started and no section has been opened yet).
-	private void navigateToFirstVisible()
-	{
-		for (int i = 0; i < BACKGROUND_WIDGETS.length; i++)
-		{
-			Widget bgWidget = client.getWidget(BACKGROUND_WIDGETS[i]);
-			if (bgWidget == null || bgWidget.isHidden())
-			{
-				continue;
-			}
-			Widget[] bgChildren = bgWidget.getDynamicChildren();
-			if (bgChildren == null)
-			{
-				continue;
-			}
-			for (int j = 0; j < bgChildren.length; j++)
-			{
-				if (!bgChildren[j].isHidden())
-				{
-					client.menuAction(j, bgWidget.getId(), MenuAction.CC_OP, 1, -1, "Check", "");
-					return;
-				}
-			}
-			return;
-		}
-	}
-
 }
